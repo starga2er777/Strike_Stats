@@ -22,9 +22,8 @@ const float R_M = 10000.0;
 
 void setup()
 {
-  Serial.begin(9600);
-  while (!Serial)
-    ;
+  // Serial.begin(9600);
+  // while (!Serial);
 
   if (!IMU.begin())
   {
@@ -42,7 +41,8 @@ void setup()
   if (!BLE.begin())
   {
     Serial.println("Starting BLE failed!");
-    while (1);
+    while (1)
+      ;
   }
 
   // set advertised local name and service UUID:
@@ -86,27 +86,46 @@ void loop()
   float ax, ay, az;
   float V_out, R_FSR;
 
-  int sensorValue = analogRead(fsrPin);
-  V_out = (sensorValue * V_in) / 1023.0;
-  R_FSR = R_M * (V_in - V_out) / V_out;
-
-  if (IMU.gyroscopeAvailable() && IMU.accelerationAvailable())
+  // if a central is connected to peripheral:
+  if (central)
   {
+    Serial.print("Connected to central: ");
     digitalWrite(LED_BUILTIN, HIGH);
-    IMU.readAcceleration(ax, ay, az);
-    IMU.readGyroscope(gx, gy, gz);
+
+    Serial.println(central.address());
+
+    // while the central is still connected to peripheral:
+    while (central.connected())
+    {
+
+      int sensorValue = analogRead(fsrPin);
+      V_out = (sensorValue * V_in) / 1023.0;
+      R_FSR = R_M * (V_in - V_out) / V_out;
+
+      if (IMU.gyroscopeAvailable() && IMU.accelerationAvailable())
+      {
+        digitalWrite(LED_BUILTIN, HIGH);
+        IMU.readAcceleration(ax, ay, az);
+        IMU.readGyroscope(gx, gy, gz);
+      }
+
+      gxCharacteristic.writeValue(gx);
+      gyCharacteristic.writeValue(gy);
+      gzCharacteristic.writeValue(gz);
+
+      axCharacteristic.writeValue(ax);
+      ayCharacteristic.writeValue(ay);
+      azCharacteristic.writeValue(az);
+
+      forceCharacteristic.writeValue(R_FSR);
+      communicationCharacteristic.writeValue(1);
+      
+      delay(50);
+    }
+
+    // when the central disconnects, print it out:
+    Serial.print("Disconnected from central: ");
+    Serial.println(central.address());
+    digitalWrite(LED_BUILTIN, LOW);
   }
-
-  // gxCharacteristic.writeValue(gx);
-  // gyCharacteristic.writeValue(gy);
-  // gzCharacteristic.writeValue(gz);
-
-  axCharacteristic.writeValue(ax);
-  ayCharacteristic.writeValue(ay);
-  azCharacteristic.writeValue(az);
-
-  forceCharacteristic.writeValue(R_FSR);
-  communicationCharacteristic.writeValue(1);
-
-  delay(80);
 }
