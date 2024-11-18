@@ -120,7 +120,7 @@ void loop()
       forceCharacteristic.writeValue(V_out);
       communicationCharacteristic.writeValue(1);
       
-      delay(50);
+      delay(75);
     }
 
     // when the central disconnects, print it out:

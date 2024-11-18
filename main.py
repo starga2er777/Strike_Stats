@@ -4,6 +4,9 @@ import numpy as np
 import struct
 import speed_utils
 from bleak import BleakScanner, BleakClient
+from visualization import Visualizer
+import threading
+import queue
 
 # BLE device and characteristic UUIDs
 device_name = "Smart Boxing Gloves"
@@ -27,6 +30,7 @@ state = 'Static'
 v = np.array([0, 0, 0])
 v_max = 0
 f_max = 0
+punch_cnt = 0
 
 # Maximum number of data points to keep
 MAX_DATA_LENGTH = 1000
@@ -45,7 +49,7 @@ async def find_device_address(device_name):
         for device in devices:
             if device.name == device_name:
                 return device.address
-        time.sleep(5)
+        await asyncio.sleep(5)
 
 def add_to_array(array, value):
     if value is not None:
@@ -53,8 +57,8 @@ def add_to_array(array, value):
         if len(array) > MAX_DATA_LENGTH:
             array.pop(0)
 
-async def main(device_name):
-    global state, v_max, v, f_max
+async def main(device_name, update_queue):
+    global state, v_max, v, f_max, punch_cnt
     # Find device's address
     device_addr = await find_device_address(device_name)
     if device_addr is not None:
@@ -63,10 +67,9 @@ async def main(device_name):
     async with BleakClient(device_addr) as client:
         # main loop
         while True:
-            
             start_time = time.perf_counter()
             try:
-                # Update data collected
+                # Uncomment and use gyro data if needed
                 # gx = bytearray_to_float(await client.read_gatt_char(gx_characteristic))
                 # gy = bytearray_to_float(await client.read_gatt_char(gy_characteristic))
                 # gz = bytearray_to_float(await client.read_gatt_char(gz_characteristic))
@@ -74,23 +77,24 @@ async def main(device_name):
                 # Get accelerometer's data for now
                 ax = bytearray_to_float(await client.read_gatt_char(ax_characteristic))
                 ay = bytearray_to_float(await client.read_gatt_char(ay_characteristic))
-                az = bytearray_to_float(await client.read_gatt_char(az_characteristic)) - 1     # remove az shift
+                az = bytearray_to_float(await client.read_gatt_char(az_characteristic)) - 1  # remove az shift
                 force = bytearray_to_float(await client.read_gatt_char(force_characteristic))
                 force = 196.4092 * force * force
-                
+
             except Exception as e:
-                print(f"Error reading characteristics. Exitting...")
-                client.disconnect()
+                print(f"Error reading characteristics: {e}. Exiting...")
+                await client.disconnect()
                 break
-                
+
             end_time = time.perf_counter()
             elapsed_time = end_time - start_time
-                
+
             ax, ay, az = speed_utils.cleanse_accel(ax, ay, az)
-            
+
             # Check and switch state:
             state = speed_utils.detect_motion([ax, ay, az], elapsed_time, state)
             # Add data to arrays
+            # Uncomment if you decide to use gyro data
             # add_to_array(gx_data, gx)
             # add_to_array(gy_data, gy)
             # add_to_array(gz_data, gz)
@@ -99,21 +103,44 @@ async def main(device_name):
             add_to_array(ay_data, ay)
             add_to_array(az_data, az)
             add_to_array(force_data, force)
-            
+
             if state == 'Static':
                 v_max = 0
                 v = np.array([0, 0, 0])
-                print(f"State = {state}, ax={ax}, ay={ay}, az={az}, f={force} took {elapsed_time:.6f} seconds")
+                print(f"State = {state}, ax={ax}, ay={ay}, az={az}, f={force:.2f}N took {elapsed_time:.6f} seconds")
                 continue
             elif state == 'Motion':
                 delta_v = speed_utils.update_spd([ax, ay, az], elapsed_time)
                 v = v + delta_v
                 v_max = max(np.linalg.norm(v), v_max)
                 f_max = max(f_max, force)
-                print(f"State = {state}, ax={ax}, ay={ay}, az={az}, v = {v}, v_max = {v_max}")
+                print(f"State = {state}, ax={ax}, ay={ay}, az={az}, v_max={v_max:.2f}m/s, f_max={f_max:.2f}N")
+                punch_cnt += 1  # Increment punch count on motion detection
+
+            # Update UI via queue
+            update_queue.put(('count', punch_cnt))
+            update_queue.put(('force', force))
+            update_queue.put(('speed', v_max))
+
+            await asyncio.sleep(0.1)  # Adjust the sleep time as needed
+
+def start_asyncio_loop(device_name, update_queue):
+    asyncio.run(main(device_name, update_queue))
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main(device_name))
+        # Create a thread-safe queue for communication
+        update_queue = queue.Queue()
+
+        # Initialize the Visualizer (Tkinter runs in the main thread)
+        visualizer = Visualizer(update_queue)
+
+        # Start the asyncio event loop in a separate thread
+        asyncio_thread = threading.Thread(target=start_asyncio_loop, args=(device_name, update_queue), daemon=True)
+        asyncio_thread.start()
+
+        # Start the Tkinter main loop (runs in the main thread)
+        visualizer.start()
+
     except KeyboardInterrupt:
         print("Program stopped.")
