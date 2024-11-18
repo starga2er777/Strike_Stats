@@ -117,7 +117,7 @@ void loop()
       ayCharacteristic.writeValue(ay);
       azCharacteristic.writeValue(az);
 
-      forceCharacteristic.writeValue(R_FSR);
+      forceCharacteristic.writeValue(V_out);
       communicationCharacteristic.writeValue(1);
       
       delay(50);
