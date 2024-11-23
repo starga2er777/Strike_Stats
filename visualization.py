@@ -7,8 +7,9 @@ import queue
 from typing import Any
 
 class Visualizer:
-    def __init__(self, update_queue: queue.Queue):
+    def __init__(self, update_queue: queue.Queue, command_queue: queue.Queue):
         self.update_queue = update_queue
+        self.command_queue = command_queue
         self.punch_count = 0
         self.punch_forces = []
         self.punch_speeds = []
@@ -66,6 +67,17 @@ class Visualizer:
         self.punch_meter_canvas.pack(pady=10)
         self.draw_circular_meter(self.punch_meter_canvas, self.punch_count)
 
+        # Reset Button
+        reset_button = tk.Button(
+            punch_meter_frame,
+            text="Reset",
+            font=("Helvetica", 14, "bold"),
+            bg="#e74c3c",
+            fg="white",
+            command=self.reset
+        )
+        reset_button.pack(pady=10)
+
         # Visualization Frame
         visualization_frame = tk.Frame(self.root, bg="#2c3e50")
         visualization_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -117,6 +129,8 @@ class Visualizer:
                     self.update_punch_force(value)
                 elif update_type == 'speed':
                     self.update_punch_speed(value)
+                elif update_type == 'reset':
+                    self.reset_ui()
         except queue.Empty:
             pass
         finally:
@@ -209,12 +223,37 @@ class Visualizer:
         self.speed_ax.set_facecolor("#34495e")
         self.speed_ax.set_ylim(0, max(25, max(self.punch_speeds, default=25) + 1))
         self.speed_ax.set_ylabel("Speed (m/s)", color="white")
-        self.speed_ax.set_xlabel("Punch Count", color="white")
+        self.speed_ax.set_xlabel("Time", color="white")
         self.speed_ax.tick_params(axis='x', colors='white')
         self.speed_ax.tick_params(axis='y', colors='white')
 
         if self.punch_speeds:
             self.speed_ax.legend()
+
+    def reset(self):
+        """Handles the Reset button click."""
+        # Send reset command to DataProcessor
+        self.command_queue.put(('reset', None))
+        # Optionally, reset UI immediately or wait for DataProcessor confirmation
+        # Here, we'll wait for DataProcessor to send the 'reset' message
+        # self.reset_ui()
+
+    def reset_ui(self):
+        """Resets the UI elements."""
+        self.punch_count = 0
+        self.punch_forces.clear()
+        self.punch_speeds.clear()
+        self.draw_circular_meter(self.punch_meter_canvas, self.punch_count)
+
+        # Clear and reset force plot
+        self.force_ax.clear()
+        self._reconfigure_force_plot()
+
+        # Clear and reset speed plot
+        self.speed_ax.clear()
+        self._reconfigure_speed_plot()
+
+        self.canvas.draw()
 
     def start(self):
         """Starts the Tkinter main loop."""

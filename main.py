@@ -64,8 +64,9 @@ class BLEManager:
             await self.client.disconnect()
 
 class DataProcessor:
-    def __init__(self, update_queue: queue.Queue):
+    def __init__(self, update_queue: queue.Queue, command_queue: queue.Queue):
         self.update_queue = update_queue
+        self.command_queue = command_queue
         self.speed_utils = SpeedUtils()
         self.state = 'Static'
         self.v = np.array([0.0, 0.0, 0.0])
@@ -94,10 +95,43 @@ class DataProcessor:
         if len(array) > MAX_DATA_LENGTH:
             array.pop(0)
 
+    async def process_commands(self):
+        """Processes incoming commands from the command queue."""
+        try:
+            while True:
+                try:
+                    command, _ = self.command_queue.get_nowait()
+                    if command == 'reset':
+                        print("Received reset command.")
+                        self.reset()
+                except queue.Empty:
+                    break
+        except Exception as e:
+            print(f"Error processing commands: {e}")
+
+    def reset(self):
+        """Resets internal state and sends reset message to UI."""
+        self.punch_count = 0
+        self.v = np.array([0.0, 0.0, 0.0])
+        self.v_max = 0.0
+        self.f_max = 0.0
+        self.state = 'Static'
+
+        self.ax_data.clear()
+        self.ay_data.clear()
+        self.az_data.clear()
+        self.force_data.clear()
+
+        # Send reset message to UI
+        self.update_queue.put(('reset', None))
+        print("Internal state has been reset.")
+
     async def process_data(self, ble_manager: BLEManager):
         """Main loop to process data from BLE device."""
         try:
             while True:
+                await self.process_commands()
+
                 start_time = time.perf_counter()
                 try:
                     # Read accelerometer data
@@ -162,10 +196,10 @@ def start_asyncio_loop(loop):
     asyncio.set_event_loop(loop)
     loop.run_forever()
 
-async def run_ble_operations(update_queue: queue.Queue):
+async def run_ble_operations(update_queue: queue.Queue, command_queue: queue.Queue):
     # Initialize BLE Manager and Data Processor
     ble_manager = BLEManager(DEVICE_NAME)
-    data_processor = DataProcessor(update_queue)
+    data_processor = DataProcessor(update_queue, command_queue)
 
     # Connect to BLE device
     try:
@@ -183,11 +217,12 @@ async def run_ble_operations(update_queue: queue.Queue):
         await ble_manager.disconnect()
 
 def main():
-    # Create a thread-safe queue for communication
+    # Create thread-safe queues for communication
     update_queue = queue.Queue()
+    command_queue = queue.Queue()
 
     # Initialize the Visualizer (Tkinter runs in the main thread)
-    visualizer = Visualizer(update_queue)
+    visualizer = Visualizer(update_queue, command_queue)
 
     # Create a new asyncio event loop
     loop = asyncio.new_event_loop()
@@ -197,7 +232,7 @@ def main():
     asyncio_thread.start()
 
     # Schedule the BLE operations coroutine
-    asyncio.run_coroutine_threadsafe(run_ble_operations(update_queue), loop)
+    asyncio.run_coroutine_threadsafe(run_ble_operations(update_queue, command_queue), loop)
 
     # Start the Tkinter main loop (runs in the main thread)
     try:
