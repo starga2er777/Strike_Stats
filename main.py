@@ -22,7 +22,7 @@ AZ_CHARACTERISTIC = "77777777-7777-7777-7777-f77777777777"
 FORCE_CHARACTERISTIC = "77777777-7777-7777-7777-77777777777f"
 COM_CHARACTERISTIC = "77777777-7777-7777-7777-777777777777"
 
-MAX_DATA_LENGTH = 1000
+MAX_DATA_LENGTH = 1000  # Maximum number of data points to keep
 
 class BLEManager:
     def __init__(self, device_name: str):
@@ -50,6 +50,7 @@ class BLEManager:
         await self.client.connect()
         if not self.client.is_connected:
             raise ConnectionError(f"Failed to connect to {self.device_name}.")
+        print(f"Connected to {self.device_name}.")
 
     async def read_characteristic(self, uuid: str) -> bytes:
         """Reads a characteristic from the BLE device."""
@@ -62,6 +63,7 @@ class BLEManager:
         """Disconnects from the BLE device."""
         if self.client:
             await self.client.disconnect()
+            print(f"Disconnected from {self.device_name}.")
 
 class DataProcessor:
     def __init__(self, update_queue: queue.Queue, command_queue: queue.Queue):
@@ -79,6 +81,14 @@ class DataProcessor:
         self.ay_data = []
         self.az_data = []
         self.force_data = []
+
+        # Historical records
+        self.history_max_speeds = []
+        self.history_max_forces = []
+
+        # Current punch max values
+        self.current_punch_max_speed = 0.0
+        self.current_punch_max_force = 0.0
 
     @staticmethod
     def bytearray_to_float(byte_data: bytes) -> float:
@@ -99,13 +109,12 @@ class DataProcessor:
         """Processes incoming commands from the command queue."""
         try:
             while True:
-                try:
-                    command, _ = self.command_queue.get_nowait()
-                    if command == 'reset':
-                        print("Received reset command.")
-                        self.reset()
-                except queue.Empty:
-                    break
+                command, _ = self.command_queue.get_nowait()
+                if command == 'reset':
+                    print("Received reset command.")
+                    self.reset()
+        except queue.Empty:
+            pass
         except Exception as e:
             print(f"Error processing commands: {e}")
 
@@ -122,6 +131,12 @@ class DataProcessor:
         self.az_data.clear()
         self.force_data.clear()
 
+        self.history_max_speeds.clear()
+        self.history_max_forces.clear()
+
+        self.current_punch_max_speed = 0.0
+        self.current_punch_max_force = 0.0
+
         # Send reset message to UI
         self.update_queue.put(('reset', None))
         print("Internal state has been reset.")
@@ -130,6 +145,7 @@ class DataProcessor:
         """Main loop to process data from BLE device."""
         try:
             while True:
+                # First, process any incoming commands
                 await self.process_commands()
 
                 start_time = time.perf_counter()
@@ -141,7 +157,7 @@ class DataProcessor:
 
                     # Read force data and compute force
                     force_raw = self.bytearray_to_float(await ble_manager.read_characteristic(FORCE_CHARACTERISTIC))
-                    force = 196.4092 * force_raw ** 2
+                    force = 196.4092 * (force_raw ** 2)
 
                 except Exception as e:
                     print(f"Error reading characteristics: {e}. Attempting to reconnect...")
@@ -166,6 +182,17 @@ class DataProcessor:
                 self.add_to_array(self.force_data, force)
 
                 if self.state == 'Static':
+                    if previous_state == 'Motion':
+                        # A punch has just ended
+                        self.history_max_speeds.append(self.current_punch_max_speed)
+                        self.history_max_forces.append(self.current_punch_max_force)
+                        # Send historical data to UI
+                        self.update_queue.put(('history_max_speed', self.current_punch_max_speed))
+                        self.update_queue.put(('history_max_force', self.current_punch_max_force))
+                        # Reset current punch max values
+                        self.current_punch_max_speed = 0.0
+                        self.current_punch_max_force = 0.0
+
                     self.v_max = 0.0
                     self.v = np.array([0.0, 0.0, 0.0])
                     print(f"State = {self.state}, ax={ax:.2f}, ay={ay:.2f}, az={az:.2f}, force={force:.2f}N took {elapsed_time:.6f} seconds")
@@ -173,8 +200,18 @@ class DataProcessor:
                     delta_v = self.speed_utils.update_speed((ax, ay, az), elapsed_time)
                     self.v += delta_v
                     current_speed = np.linalg.norm(self.v)
-                    self.v_max = max(current_speed, self.v_max)
-                    self.f_max = max(force, self.f_max)
+                    if current_speed > self.v_max:
+                        self.v_max = current_speed
+                        # Update current punch max speed
+                        if current_speed > self.current_punch_max_speed:
+                            self.current_punch_max_speed = current_speed
+
+                    if force > self.f_max:
+                        self.f_max = force
+                        # Update current punch max force
+                        if force > self.current_punch_max_force:
+                            self.current_punch_max_force = force
+
                     print(f"State = {self.state}, ax={ax:.2f}, ay={ay:.2f}, az={az:.2f}, v_max={self.v_max:.2f} m/s, f_max={self.f_max:.2f}N")
 
                     # Increment punch count if transitioning to Motion
@@ -197,6 +234,7 @@ def start_asyncio_loop(loop):
     loop.run_forever()
 
 async def run_ble_operations(update_queue: queue.Queue, command_queue: queue.Queue):
+    """Initializes BLEManager and DataProcessor, connects to BLE device, and starts processing data."""
     # Initialize BLE Manager and Data Processor
     ble_manager = BLEManager(DEVICE_NAME)
     data_processor = DataProcessor(update_queue, command_queue)

@@ -6,6 +6,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import queue
 from typing import Any
 
+
 class Visualizer:
     def __init__(self, update_queue: queue.Queue, command_queue: queue.Queue):
         self.update_queue = update_queue
@@ -13,12 +14,16 @@ class Visualizer:
         self.punch_count = 0
         self.punch_forces = []
         self.punch_speeds = []
-        self.max_data_points = 10
+        self.max_data_points = 100  # Maximum number of historical records to display
+
+        # Historical records
+        self.history_max_speeds = []
+        self.history_max_forces = []
 
         # Initialize Tkinter UI
         self.root = tk.Tk()
         self.root.title("Smart Boxing Glove Trainer")
-        self.root.geometry("900x750")
+        self.root.geometry("1200x800")  # Adjusted window size to accommodate new elements
         self.root.configure(bg="#34495e")
 
         self._create_widgets()
@@ -39,14 +44,18 @@ class Visualizer:
         )
         title_label.pack(pady=20)
 
+        # Top Frame for Punch Count and Reset Button
+        top_frame = tk.Frame(self.root, bg="#34495e")
+        top_frame.pack(pady=10, padx=20, fill="x")
+
         # Punch Count Section
         punch_meter_frame = tk.Frame(
-            self.root,
+            top_frame,
             bg="#1abc9c",
             highlightbackground="#16a085",
             highlightthickness=2
         )
-        punch_meter_frame.pack(pady=10, padx=20, fill="both")
+        punch_meter_frame.pack(side="left", padx=10, fill="both", expand=True)
 
         punch_meter_label = tk.Label(
             punch_meter_frame,
@@ -69,14 +78,110 @@ class Visualizer:
 
         # Reset Button
         reset_button = tk.Button(
-            punch_meter_frame,
+            top_frame,
             text="Reset",
             font=("Helvetica", 14, "bold"),
             bg="#e74c3c",
             fg="white",
             command=self.reset
         )
-        reset_button.pack(pady=10)
+        reset_button.pack(side="right", padx=10)
+
+        # Middle Frame for Current Speed and Force
+        middle_frame = tk.Frame(self.root, bg="#34495e")
+        middle_frame.pack(pady=10, padx=20, fill="x")
+
+        # Current Max Speed
+        speed_frame = tk.Frame(middle_frame, bg="#2c3e50", highlightbackground="#16a085", highlightthickness=2)
+        speed_frame.pack(side="left", padx=10, fill="both", expand=True)
+
+        speed_label = tk.Label(
+            speed_frame,
+            text="Current Max Speed (m/s)",
+            font=("Helvetica", 16, "bold"),
+            bg="#2c3e50",
+            fg="white"
+        )
+        speed_label.pack(pady=10)
+
+        self.current_speed_var = tk.StringVar(value="0.00")
+        current_speed_display = tk.Label(
+            speed_frame,
+            textvariable=self.current_speed_var,
+            font=("Helvetica", 20, "bold"),
+            bg="#2c3e50",
+            fg="#1abc9c"
+        )
+        current_speed_display.pack(pady=10)
+
+        # Current Max Force
+        force_frame = tk.Frame(middle_frame, bg="#2c3e50", highlightbackground="#16a085", highlightthickness=2)
+        force_frame.pack(side="left", padx=10, fill="both", expand=True)
+
+        force_label = tk.Label(
+            force_frame,
+            text="Current Max Force (N)",
+            font=("Helvetica", 16, "bold"),
+            bg="#2c3e50",
+            fg="white"
+        )
+        force_label.pack(pady=10)
+
+        self.current_force_var = tk.StringVar(value="0.00")
+        current_force_display = tk.Label(
+            force_frame,
+            textvariable=self.current_force_var,
+            font=("Helvetica", 20, "bold"),
+            bg="#2c3e50",
+            fg="#1abc9c"
+        )
+        current_force_display.pack(pady=10)
+
+        # Historical Max Speed and Force
+        history_frame = tk.Frame(self.root, bg="#34495e")
+        history_frame.pack(pady=10, padx=20, fill="both", expand=True)
+
+        # Historical Max Speed
+        history_speed_frame = tk.Frame(history_frame, bg="#2c3e50", highlightbackground="#16a085", highlightthickness=2)
+        history_speed_frame.pack(side="left", padx=10, fill="both", expand=True)
+
+        history_speed_label = tk.Label(
+            history_speed_frame,
+            text="Historical Max Speeds (m/s)",
+            font=("Helvetica", 16, "bold"),
+            bg="#2c3e50",
+            fg="white"
+        )
+        history_speed_label.pack(pady=10)
+
+        self.history_speed_listbox = tk.Listbox(
+            history_speed_frame,
+            font=("Helvetica", 14),
+            bg="#ecf0f1",
+            fg="#2c3e50"
+        )
+        self.history_speed_listbox.pack(pady=10, padx=10, fill="both", expand=True)
+
+        # Historical Max Force
+        history_force_frame = tk.Frame(history_frame, bg="#2c3e50", highlightbackground="#16a085", highlightthickness=2)
+        history_force_frame.pack(side="left", padx=10, fill="both", expand=True)
+
+        history_force_label = tk.Label(
+            history_force_frame,
+            text="Historical Max Forces (N)",
+            font=("Helvetica", 16, "bold"),
+            bg="#2c3e50",
+            fg="white"
+        )
+        history_force_label.pack(pady=10)
+
+        self.history_force_listbox = tk.Listbox(
+            history_force_frame,
+            font=("Helvetica", 14),
+            bg="#ecf0f1",
+            fg="#2c3e50"
+        )
+        self.history_force_listbox.pack(pady=10, padx=10, fill="both", expand=True)
 
         # Visualization Frame
         visualization_frame = tk.Frame(self.root, bg="#2c3e50")
@@ -114,7 +219,7 @@ class Visualizer:
         self.speed_ax.set_facecolor("#34495e")
         self.speed_ax.set_ylim(0, 25)
         self.speed_ax.set_ylabel("Speed (m/s)", color="white")
-        self.speed_ax.set_xlabel("Time", color="white")
+        self.speed_ax.set_xlabel("Punch Count", color="white")
         self.speed_ax.tick_params(axis='x', colors='white')
         self.speed_ax.tick_params(axis='y', colors='white')
 
@@ -126,9 +231,13 @@ class Visualizer:
                 if update_type == 'count':
                     self.update_punch_count(value)
                 elif update_type == 'force':
-                    self.update_punch_force(value)
+                    self.update_current_force(value)
                 elif update_type == 'speed':
-                    self.update_punch_speed(value)
+                    self.update_current_speed(value)
+                elif update_type == 'history_max_speed':
+                    self.update_history_max_speed(value)
+                elif update_type == 'history_max_force':
+                    self.update_history_max_force(value)
                 elif update_type == 'reset':
                     self.reset_ui()
         except queue.Empty:
@@ -141,6 +250,32 @@ class Visualizer:
         """Updates the punch count display."""
         self.punch_count = count
         self.draw_circular_meter(self.punch_meter_canvas, self.punch_count)
+
+    def update_current_speed(self, speed: float):
+        """Updates the current max speed display."""
+        self.current_speed_var.set(f"{speed:.2f}")
+
+    def update_current_force(self, force: float):
+        """Updates the current max force display."""
+        self.current_force_var.set(f"{force:.2f}")
+
+    def update_history_max_speed(self, speed: float):
+        """Updates the historical max speed list."""
+        self.history_max_speeds.append(speed)
+        self.history_speed_listbox.insert(tk.END, f"{speed:.2f} m/s")
+        # Optionally, limit the number of historical records displayed
+        if len(self.history_max_speeds) > self.max_data_points:
+            self.history_max_speeds.pop(0)
+            self.history_speed_listbox.delete(0)
+
+    def update_history_max_force(self, force: float):
+        """Updates the historical max force list."""
+        self.history_max_forces.append(force)
+        self.history_force_listbox.insert(tk.END, f"{force:.2f} N")
+        # Optionally, limit the number of historical records displayed
+        if len(self.history_max_forces) > self.max_data_points:
+            self.history_max_forces.pop(0)
+            self.history_force_listbox.delete(0)
 
     def draw_circular_meter(self, canvas: tk.Canvas, value: int):
         """Draws a circular meter representing the punch count."""
@@ -223,27 +358,47 @@ class Visualizer:
         self.speed_ax.set_facecolor("#34495e")
         self.speed_ax.set_ylim(0, max(25, max(self.punch_speeds, default=25) + 1))
         self.speed_ax.set_ylabel("Speed (m/s)", color="white")
-        self.speed_ax.set_xlabel("Time", color="white")
+        self.speed_ax.set_xlabel("Punch Count", color="white")
         self.speed_ax.tick_params(axis='x', colors='white')
         self.speed_ax.tick_params(axis='y', colors='white')
 
         if self.punch_speeds:
             self.speed_ax.legend()
 
+    def update_history_max_speed(self, speed: float):
+        """Updates the historical max speed list."""
+        self.history_max_speeds.append(speed)
+        self.history_speed_listbox.insert(tk.END, f"{speed:.2f} m/s")
+        # Optionally, limit the number of historical records displayed
+        if len(self.history_max_speeds) > self.max_data_points:
+            self.history_max_speeds.pop(0)
+            self.history_speed_listbox.delete(0)
+
+    def update_history_max_force(self, force: float):
+        """Updates the historical max force list."""
+        self.history_max_forces.append(force)
+        self.history_force_listbox.insert(tk.END, f"{force:.2f} N")
+        # Optionally, limit the number of historical records displayed
+        if len(self.history_max_forces) > self.max_data_points:
+            self.history_max_forces.pop(0)
+            self.history_force_listbox.delete(0)
+
     def reset(self):
         """Handles the Reset button click."""
         # Send reset command to DataProcessor
         self.command_queue.put(('reset', None))
-        # Optionally, reset UI immediately or wait for DataProcessor confirmation
-        # Here, we'll wait for DataProcessor to send the 'reset' message
-        # self.reset_ui()
+        # The UI will be reset upon receiving the 'reset' message from DataProcessor
 
     def reset_ui(self):
         """Resets the UI elements."""
         self.punch_count = 0
-        self.punch_forces.clear()
-        self.punch_speeds.clear()
+        self.history_max_speeds.clear()
+        self.history_max_forces.clear()
+        self.history_speed_listbox.delete(0, tk.END)
+        self.history_force_listbox.delete(0, tk.END)
         self.draw_circular_meter(self.punch_meter_canvas, self.punch_count)
+        self.current_speed_var.set("0.00")
+        self.current_force_var.set("0.00")
 
         # Clear and reset force plot
         self.force_ax.clear()
