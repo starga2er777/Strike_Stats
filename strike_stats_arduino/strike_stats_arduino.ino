@@ -1,131 +1,200 @@
 #include <ArduinoBLE.h>
 #include <Arduino_LSM6DS3.h>
 
-BLEService imuService("119");
+#define IMU_SERVICE_UUID "119"
+#define SPEED_CHARACTERISTIC_UUID   "77777777-7777-7777-7777-a77777777777"
+#define FORCE_CHARACTERISTIC_UUID   "77777777-7777-7777-7777-b77777777777"
 
-// Characteristics
-BLEFloatCharacteristic gxCharacteristic("77777777-7777-7777-7777-a77777777777", BLERead | BLEWrite);
-BLEFloatCharacteristic gyCharacteristic("77777777-7777-7777-7777-b77777777777", BLERead | BLEWrite);
-BLEFloatCharacteristic gzCharacteristic("77777777-7777-7777-7777-c77777777777", BLERead | BLEWrite);
+#define MOTION_ACCEL_THRESHOLD 2
+// #define ACCEL_CLEANSE_THRESHOLD 0.05
+#define FORCE_CLEANSE_THRESHOLD 5
+#define G_VALUE 9.80665
 
-BLEFloatCharacteristic axCharacteristic("77777777-7777-7777-7777-d77777777777", BLERead | BLEWrite);
-BLEFloatCharacteristic ayCharacteristic("77777777-7777-7777-7777-e77777777777", BLERead | BLEWrite);
-BLEFloatCharacteristic azCharacteristic("77777777-7777-7777-7777-f77777777777", BLERead | BLEWrite);
+// Analog Input for Force Sensitive Resistor
+const int fsrPin = A0;          // FSR connected to A0 pin
+const float V_in = 5.0;         // Input voltage
+const float R_M = 10000.0;      // fixed resistor = 10k Ohm
 
-BLEFloatCharacteristic forceCharacteristic("77777777-7777-7777-7777-77777777777f", BLERead | BLEWrite);
-BLEUnsignedIntCharacteristic communicationCharacteristic("77777777-7777-7777-7777-777777777777", BLERead | BLEWrite);
+enum State {
+  STATIC,
+  MOTION
+};
 
-// Analog Inputs
-const int fsrPin = A0;
-const float V_in = 5.0;
-const float R_M = 10000.0;
+State currentState = STATIC;
+State previousState = STATIC;
 
-void setup()
-{
-  // Serial.begin(9600);
-  // while (!Serial);
+float currentMaxSpeed = 0.0;
+float currentMaxForce = 0.0;
+float ax, ay, az, gx, gy, gz, az_raw, vx, vy, vz;
 
-  if (!IMU.begin())
-  {
+BLEService imuService(IMU_SERVICE_UUID);
+BLEFloatCharacteristic speedCharacteristic(SPEED_CHARACTERISTIC_UUID, BLERead | BLENotify);
+BLEFloatCharacteristic forceCharacteristic(FORCE_CHARACTERISTIC_UUID, BLERead | BLENotify);
+
+const int ledPin = LED_BUILTIN;
+
+void sendData();
+void resetPunch();
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial);
+
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, LOW);
+
+  if (!IMU.begin()) {
     Serial.println("Failed to initialize IMU!");
+    while (1);
   }
 
   Serial.print("Gyroscope sample rate = ");
   Serial.print(IMU.gyroscopeSampleRate());
-  Serial.println(" Hz\n");
+  Serial.println(" Hz");
   Serial.print("Accelerometer sample rate = ");
   Serial.print(IMU.accelerationSampleRate());
-  Serial.println(" Hz\n");
+  Serial.println(" Hz");
 
-  // BLE initialization
-  if (!BLE.begin())
-  {
+  if (!BLE.begin()) {
     Serial.println("Starting BLE failed!");
-    while (1)
-      ;
+    while (1);
   }
 
-  // set advertised local name and service UUID:
   BLE.setLocalName("Smart Boxing Gloves");
   BLE.setAdvertisedService(imuService);
 
-  // add the characteristic to the service
-  imuService.addCharacteristic(gxCharacteristic);
-  imuService.addCharacteristic(gyCharacteristic);
-  imuService.addCharacteristic(gzCharacteristic);
-  imuService.addCharacteristic(axCharacteristic);
-  imuService.addCharacteristic(ayCharacteristic);
-  imuService.addCharacteristic(azCharacteristic);
+  imuService.addCharacteristic(speedCharacteristic);
   imuService.addCharacteristic(forceCharacteristic);
-  imuService.addCharacteristic(communicationCharacteristic);
 
-  // add service
   BLE.addService(imuService);
 
-  // set the initial value for the characteristics:
-  gxCharacteristic.writeValue(0.0f);
-  gyCharacteristic.writeValue(0.0f);
-  gzCharacteristic.writeValue(0.0f);
-  axCharacteristic.writeValue(0.0f);
-  ayCharacteristic.writeValue(0.0f);
-  azCharacteristic.writeValue(0.0f);
+  speedCharacteristic.writeValue(0.0f);
   forceCharacteristic.writeValue(0.0f);
-  communicationCharacteristic.writeValue(0);
 
-  // start advertising
   BLE.advertise();
 
   Serial.println("BLE Services Launched");
 }
 
-void loop()
-{
-  // listen for BLE peripherals to connect:
+void loop() {
   BLEDevice central = BLE.central();
-  float gx, gy, gz;
-  float ax, ay, az;
-  float V_out, R_FSR;
 
-  // if a central is connected to peripheral:
-  if (central)
-  {
+  if (central) {
     Serial.print("Connected to central: ");
-    digitalWrite(LED_BUILTIN, HIGH);
-
     Serial.println(central.address());
+    digitalWrite(ledPin, HIGH);
 
-    // while the central is still connected to peripheral:
-    while (central.connected())
-    {
+    resetPunch();
 
+    while (central.connected()) {
+      unsigned long startTime = millis();
       int sensorValue = analogRead(fsrPin);
-      V_out = (sensorValue * V_in) / 1023.0;
-      R_FSR = R_M * (V_in - V_out) / V_out;
+      float V_out = (sensorValue * V_in) / 1023.0;
+      float R_FSR = R_M * (V_in - V_out) / V_out;
+      float force = 196.4092 * V_out * V_out;
 
-      if (IMU.gyroscopeAvailable() && IMU.accelerationAvailable())
-      {
-        digitalWrite(LED_BUILTIN, HIGH);
-        IMU.readAcceleration(ax, ay, az);
-        IMU.readGyroscope(gx, gy, gz);
+      if (IMU.accelerationAvailable() && IMU.gyroscopeAvailable()) {
+        IMU.readAcceleration(ax, ay, az_raw);
       }
 
-      gxCharacteristic.writeValue(gx);
-      gyCharacteristic.writeValue(gy);
-      gzCharacteristic.writeValue(gz);
 
-      axCharacteristic.writeValue(ax);
-      ayCharacteristic.writeValue(ay);
-      azCharacteristic.writeValue(az);
+      // remove az shift
+      az = az_raw - 1.f;
+      // Serial.print("IMU: ax=");
+      // Serial.print(ax);
+      // Serial.print(", ay=");
+      // Serial.print(ay);
+      // Serial.print(", az=");
+      // Serial.println(az);
 
-      forceCharacteristic.writeValue(V_out);
-      communicationCharacteristic.writeValue(1);
+      // Cleanse Data
+      if (force < FORCE_CLEANSE_THRESHOLD)
+        force = 0;
+
+
+      float accelMagnitude = sqrt(ax * ax + ay * ay + az * az);
       
-      delay(75);
+
+      // Detect punch
+      if (accelMagnitude > MOTION_ACCEL_THRESHOLD) {
+        currentState = MOTION;
+        if (previousState == STATIC) {
+          Serial.println("Punch detected!");
+          currentMaxSpeed = 0.0;
+          currentMaxForce = 0.0;
+          vx = 0.0f;
+          vy = 0.0f;
+          vz = 0.0f;
+        }
+      } else {
+        currentState = STATIC;
+      }
+      delay(10);
+      unsigned long endTime = millis();
+
+      float time_delay = (float)((endTime - startTime) / 1000.f);
+
+      if (currentState == MOTION) {
+      // Serial.print("IMU: ax=");
+      // Serial.print(ax);
+      // Serial.print(", ay=");
+      // Serial.print(ay);
+      // Serial.print(", az=");
+      // Serial.println(az);
+
+        vx += ax * time_delay * G_VALUE;
+        vy += ay * time_delay * G_VALUE;
+        vz += az * time_delay * G_VALUE;
+
+        float speed = sqrt(vx * vx + vy * vy + vz * vz);
+        if (speed > currentMaxSpeed) {
+          currentMaxSpeed = speed;
+        }
+
+        if (force > currentMaxForce) {
+          currentMaxForce = force;
+        }
+
+        Serial.print("Speed: ");
+        Serial.print(speed);
+        Serial.print(" m/s, Force: ");
+        Serial.print(force);
+        Serial.println(" N");
+      }
+
+      // End of one punch
+      if (currentState == STATIC && previousState == MOTION) {
+        Serial.print("Punch Count: ");
+        Serial.print("Max Speed: ");
+        Serial.print(currentMaxSpeed);
+        Serial.print(" m/s, Max Force: ");
+        Serial.print(currentMaxForce);
+        Serial.println(" N");
+
+        sendData();
+
+        currentMaxSpeed = 0.0;
+        currentMaxForce = 0.0;
+      }
+
+      previousState = currentState;
     }
 
-    // when the central disconnects, print it out:
     Serial.print("Disconnected from central: ");
     Serial.println(central.address());
-    digitalWrite(LED_BUILTIN, LOW);
+    digitalWrite(ledPin, LOW);
   }
+}
+
+void sendData() {
+  speedCharacteristic.writeValue(currentMaxSpeed);
+  forceCharacteristic.writeValue(currentMaxForce);
+  Serial.println("Data Sent...");
+}
+
+void resetPunch() {
+  currentMaxSpeed = 0.0;
+  currentMaxForce = 0.0;
+
+  Serial.println("Punch data has been reset.");
 }
