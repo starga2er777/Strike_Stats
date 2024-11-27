@@ -5,10 +5,15 @@
 #define SPEED_CHARACTERISTIC_UUID   "77777777-7777-7777-7777-a77777777777"
 #define FORCE_CHARACTERISTIC_UUID   "77777777-7777-7777-7777-b77777777777"
 
-#define MOTION_ACCEL_THRESHOLD 2
-// #define ACCEL_CLEANSE_THRESHOLD 0.05
+#define MOTION_ACCEL_THRESHOLD 8
 #define FORCE_CLEANSE_THRESHOLD 5
+#define ACCEL_CLEANSE_THRESHOLD 0.9
+#define MOTION_SUSTAIN 200
+
 #define G_VALUE 9.80665
+#define AX_INCR 5
+#define AY_INCR 0.8
+#define AZ_INCR 0.3
 
 // Analog Input for Force Sensitive Resistor
 const int fsrPin = A0;          // FSR connected to A0 pin
@@ -32,13 +37,14 @@ BLEFloatCharacteristic speedCharacteristic(SPEED_CHARACTERISTIC_UUID, BLERead | 
 BLEFloatCharacteristic forceCharacteristic(FORCE_CHARACTERISTIC_UUID, BLERead | BLENotify);
 
 const int ledPin = LED_BUILTIN;
+bool send_flag = false;
 
 void sendData();
 void resetPunch();
 
 void setup() {
   Serial.begin(9600);
-  while (!Serial);
+  // while (!Serial);
 
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, LOW);
@@ -85,9 +91,9 @@ void loop() {
     digitalWrite(ledPin, HIGH);
 
     resetPunch();
+    unsigned long startTime = millis(), endTime, motion_start_time;
 
     while (central.connected()) {
-      unsigned long startTime = millis();
       int sensorValue = analogRead(fsrPin);
       float V_out = (sensorValue * V_in) / 1023.0;
       float R_FSR = R_M * (V_in - V_out) / V_out;
@@ -97,9 +103,21 @@ void loop() {
         IMU.readAcceleration(ax, ay, az_raw);
       }
 
-
       // remove az shift
       az = az_raw - 1.f;
+
+      if (ax < ACCEL_CLEANSE_THRESHOLD)
+        ax = 0;
+      if (ay < ACCEL_CLEANSE_THRESHOLD)
+        ay = 0;
+      if (az < ACCEL_CLEANSE_THRESHOLD)
+        az = 0;
+
+      ax = AX_INCR * ax;
+      ay = AY_INCR * ay;
+      az = AZ_INCR * az;
+
+
       // Serial.print("IMU: ax=");
       // Serial.print(ax);
       // Serial.print(", ay=");
@@ -107,14 +125,13 @@ void loop() {
       // Serial.print(", az=");
       // Serial.println(az);
 
+
       // Cleanse Data
       if (force < FORCE_CLEANSE_THRESHOLD)
         force = 0;
 
-
       float accelMagnitude = sqrt(ax * ax + ay * ay + az * az);
       
-
       // Detect punch
       if (accelMagnitude > MOTION_ACCEL_THRESHOLD) {
         currentState = MOTION;
@@ -130,17 +147,15 @@ void loop() {
         currentState = STATIC;
       }
       delay(10);
-      unsigned long endTime = millis();
+      endTime = millis();
 
       float time_delay = (float)((endTime - startTime) / 1000.f);
 
+      startTime = millis();
+
       if (currentState == MOTION) {
-      // Serial.print("IMU: ax=");
-      // Serial.print(ax);
-      // Serial.print(", ay=");
-      // Serial.print(ay);
-      // Serial.print(", az=");
-      // Serial.println(az);
+        motion_start_time = millis();
+        send_flag = false;
 
         vx += ax * time_delay * G_VALUE;
         vy += ay * time_delay * G_VALUE;
@@ -164,7 +179,12 @@ void loop() {
 
       // End of one punch
       if (currentState == STATIC && previousState == MOTION) {
-        Serial.print("Punch Count: ");
+        send_flag = true;
+      }
+
+      // Avoid sending multiple packages within one punch
+      if (send_flag && millis() - motion_start_time >= MOTION_SUSTAIN) {
+        Serial.print("Punch Info: ");
         Serial.print("Max Speed: ");
         Serial.print(currentMaxSpeed);
         Serial.print(" m/s, Max Force: ");
@@ -172,10 +192,12 @@ void loop() {
         Serial.println(" N");
 
         sendData();
+        send_flag = false;
 
         currentMaxSpeed = 0.0;
         currentMaxForce = 0.0;
       }
+
 
       previousState = currentState;
     }
@@ -189,7 +211,6 @@ void loop() {
 void sendData() {
   speedCharacteristic.writeValue(currentMaxSpeed);
   forceCharacteristic.writeValue(currentMaxForce);
-  Serial.println("Data Sent...");
 }
 
 void resetPunch() {
