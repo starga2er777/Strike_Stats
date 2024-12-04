@@ -127,8 +127,8 @@ class DataProcessor:
                             self.historical_max_speed = self.previous_max_speed
                         self.update_queue.put(('previous_max_speed', self.previous_max_speed))
                         self.update_queue.put(('historical_max_speed', self.historical_max_speed))
-                        self.punch_count += 1
-                        self.update_queue.put(('count', self.punch_count))
+                        # self.punch_count += 1
+                        # self.update_queue.put(('count', self.punch_count))
 
                     elif key == 'previous_max_force':
                         self.previous_max_force = value

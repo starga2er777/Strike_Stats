@@ -91,7 +91,7 @@ class Visualizer:
             self.top_left_frame, orient='horizontal', length=200, mode='determinate',
             style="Custom.Horizontal.TProgressbar")
         self.punch_meter.pack(anchor='w', pady=10)
-        self.punch_meter['maximum'] = 100
+        self.punch_meter['maximum'] = 50
 
         # Reset button
         self.reset_button = tk.Button(
@@ -222,6 +222,11 @@ class Visualizer:
                         text=f"Speed: {self.previous_max_speed:.2f} m/s")
                     self.speed_history.append(self.previous_max_speed)
                     self.update_speed_graph()
+                    self.punch_count = self.punch_count + 1
+                    self.punch_count_label.config(text=f"Punch Count: {self.punch_count}")
+                    # Update the punch meter
+                    self.punch_meter['value'] = min(self.punch_count, 50)  # Example scaling
+
                 elif key == 'previous_max_force':
                     self.previous_max_force = value
                     self.latest_force_label.config(
@@ -236,11 +241,11 @@ class Visualizer:
                     self.historical_max_force = value
                     self.max_force_label.config(
                         text=f"Force: {self.historical_max_force:.2f} N")
-                elif key == 'count':
-                    self.punch_count = value
-                    self.punch_count_label.config(text=f"Punch Count: {self.punch_count}")
-                    # Update the punch meter
-                    self.punch_meter['value'] = min(self.punch_count, 100)  # Example scaling
+                # elif key == 'count':
+                #     self.punch_count = value
+                #     self.punch_count_label.config(text=f"Punch Count: {self.punch_count}")
+                #     # Update the punch meter
+                #     self.punch_meter['value'] = min(self.punch_count, 50)  # Example scaling
         except queue.Empty:
             pass
         except Exception as e:
@@ -279,9 +284,9 @@ class Visualizer:
 
     def get_force_color(self, force):
         # Determine color based on force intensity
-        if force < 50:
+        if force < 100:
             return self.intensity_colors['low']    # Low intensity
-        elif force < 100:
+        elif force < 300:
             return self.intensity_colors['medium']  # Medium intensity
         else:
             return self.intensity_colors['high']   # High intensity
